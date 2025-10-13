@@ -1,0 +1,7 @@
+lgpio==0.2.2.0
+opencv-python==4.11.0.86
+numpy==1.26.4
+pygame==2.1.2
+obd==0.7.3
+picamera2==0.3.25
+rpi5-ws2812==0.1.2
