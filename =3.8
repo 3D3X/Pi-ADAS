@@ -1,0 +1,79 @@
+Requirement already satisfied: lgpio==0.2.2.0 in /usr/lib/python3/dist-packages (0.2.2.0)
+Collecting opencv-python==4.11.0.86
+  Using cached opencv_python-4.11.0.86-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl.metadata (20 kB)
+Collecting numpy==1.26.4
+  Using cached numpy-1.26.4-cp313-cp313-linux_aarch64.whl
+Collecting matplotlib
+  Using cached matplotlib-3.10.7-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (11 kB)
+Collecting pandas-stubs
+  Using cached pandas_stubs-2.3.2.250926-py3-none-any.whl.metadata (10 kB)
+Collecting obd==0.7.3
+  Using cached obd-0.7.3-py3-none-any.whl.metadata (3.2 kB)
+Collecting picamera2==0.3.25
+  Using cached picamera2-0.3.25-py3-none-any.whl.metadata (6.4 kB)
+Collecting rpi5-ws2812==0.1.2
+  Using cached rpi5_ws2812-0.1.2-py3-none-any.whl.metadata (2.6 kB)
+Requirement already satisfied: pyserial==3.* in /usr/lib/python3/dist-packages (from obd==0.7.3) (3.5)
+Collecting pint==0.24.* (from obd==0.7.3)
+  Using cached Pint-0.24.4-py3-none-any.whl.metadata (8.5 kB)
+Requirement already satisfied: PiDNG in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (4.0.9)
+Requirement already satisfied: av in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (14.2.0)
+Requirement already satisfied: jsonschema in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (4.19.2)
+Requirement already satisfied: libarchive-c in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (5.1)
+Requirement already satisfied: piexif in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (1.1.3)
+Requirement already satisfied: pillow in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (11.1.0)
+Requirement already satisfied: python-prctl in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (1.8.1)
+Requirement already satisfied: simplejpeg in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (1.8.1)
+Requirement already satisfied: tqdm in /usr/lib/python3/dist-packages (from picamera2==0.3.25) (4.67.1)
+Collecting v4l2-python3 (from picamera2==0.3.25)
+  Using cached v4l2_python3-0.3.5-py3-none-any.whl.metadata (772 bytes)
+Requirement already satisfied: spidev in /usr/lib/python3/dist-packages (from rpi5-ws2812==0.1.2) (3.6)
+Requirement already satisfied: platformdirs>=2.1.0 in /usr/lib/python3/dist-packages (from pint==0.24.*->obd==0.7.3) (4.3.7)
+Requirement already satisfied: typing-extensions>=4.0.0 in /usr/lib/python3/dist-packages (from pint==0.24.*->obd==0.7.3) (4.13.2)
+Collecting flexcache>=0.3 (from pint==0.24.*->obd==0.7.3)
+  Using cached flexcache-0.3-py3-none-any.whl.metadata (7.0 kB)
+Collecting flexparser>=0.4 (from pint==0.24.*->obd==0.7.3)
+  Using cached flexparser-0.4-py3-none-any.whl.metadata (18 kB)
+Collecting contourpy>=1.0.1 (from matplotlib)
+  Using cached contourpy-1.3.3-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl.metadata (5.5 kB)
+Collecting cycler>=0.10 (from matplotlib)
+  Using cached cycler-0.12.1-py3-none-any.whl.metadata (3.8 kB)
+Collecting fonttools>=4.22.0 (from matplotlib)
+  Using cached fonttools-4.60.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (112 kB)
+Collecting kiwisolver>=1.3.1 (from matplotlib)
+  Using cached kiwisolver-1.4.9-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl.metadata (6.3 kB)
+Requirement already satisfied: packaging>=20.0 in /usr/lib/python3/dist-packages (from matplotlib) (25.0)
+Collecting pyparsing>=3 (from matplotlib)
+  Using cached pyparsing-3.2.5-py3-none-any.whl.metadata (5.0 kB)
+Requirement already satisfied: python-dateutil>=2.7 in /usr/lib/python3/dist-packages (from matplotlib) (2.9.0)
+Requirement already satisfied: types-pytz>=2022.1.1 in /usr/lib/python3/dist-packages (from pandas-stubs) (2024.2)
+Requirement already satisfied: attrs>=22.2.0 in /usr/lib/python3/dist-packages (from jsonschema->picamera2==0.3.25) (25.3.0)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in /usr/lib/python3/dist-packages (from jsonschema->picamera2==0.3.25) (2023.12.1)
+Requirement already satisfied: referencing>=0.28.4 in /usr/lib/python3/dist-packages (from jsonschema->picamera2==0.3.25) (0.36.2)
+Requirement already satisfied: rpds-py>=0.7.1 in /usr/lib/python3/dist-packages (from jsonschema->picamera2==0.3.25) (0.21.0)
+Using cached opencv_python-4.11.0.86-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (42.2 MB)
+Using cached obd-0.7.3-py3-none-any.whl (72 kB)
+Using cached picamera2-0.3.25-py3-none-any.whl (114 kB)
+Using cached rpi5_ws2812-0.1.2-py3-none-any.whl (4.8 kB)
+Using cached Pint-0.24.4-py3-none-any.whl (302 kB)
+Using cached matplotlib-3.10.7-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (9.5 MB)
+Using cached pandas_stubs-2.3.2.250926-py3-none-any.whl (159 kB)
+Using cached contourpy-1.3.3-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl (334 kB)
+Using cached cycler-0.12.1-py3-none-any.whl (8.3 kB)
+Using cached flexcache-0.3-py3-none-any.whl (13 kB)
+Using cached flexparser-0.4-py3-none-any.whl (27 kB)
+Using cached fonttools-4.60.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (5.0 MB)
+Using cached kiwisolver-1.4.9-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl (1.3 MB)
+Using cached pyparsing-3.2.5-py3-none-any.whl (113 kB)
+Using cached v4l2_python3-0.3.5-py3-none-any.whl (22 kB)
+Installing collected packages: v4l2-python3, pyparsing, numpy, kiwisolver, fonttools, flexparser, flexcache, cycler, rpi5-ws2812, pint, pandas-stubs, opencv-python, contourpy, obd, matplotlib, picamera2
+  Attempting uninstall: numpy
+    Found existing installation: numpy 2.2.4
+    Not uninstalling numpy at /usr/lib/python3/dist-packages, outside environment /home/edex/Desktop/Pi-ADAS/.venv
+    Can't uninstall 'numpy'. No files were found to uninstall.
+  Attempting uninstall: picamera2
+    Found existing installation: picamera2 0.3.31
+    Not uninstalling picamera2 at /usr/lib/python3/dist-packages, outside environment /home/edex/Desktop/Pi-ADAS/.venv
+    Can't uninstall 'picamera2'. No files were found to uninstall.
+
+Successfully installed contourpy-1.3.3 cycler-0.12.1 flexcache-0.3 flexparser-0.4 fonttools-4.60.1 kiwisolver-1.4.9 matplotlib-3.10.7 numpy-1.26.4 obd-0.7.3 opencv-python-4.11.0.86 pandas-stubs-2.3.2.250926 picamera2-0.3.25 pint-0.24.4 pyparsing-3.2.5 rpi5-ws2812-0.1.2 v4l2-python3-0.3.5
