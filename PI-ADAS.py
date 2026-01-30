@@ -313,6 +313,7 @@ if RaspberryPi:
             self.rightlane = 0
             self.light = 0
             self.turnr = 0
+            self.collision = 0
 
             # Predefiniowane kolory z uwzględnieniem jasności
             self.yellow = self._apply_brightness((255, 255, 0))
@@ -346,27 +347,54 @@ if RaspberryPi:
                 self.changed = True
 
         def update_leds(self):
-            """Aktualizuje stan diod tylko jezli zaszla zmiana"""
+            """Aktualizuje stan diod z uwzględnieniem priorytetów alarmów"""
             new_states = [self.black] * 8
 
-            # Mapa diod
-            if self.turnl:
-                new_states[0] = self.yellow
-            if self.leftlane:
-                new_states[2] = self.green
-            if self.carlock:
-                new_states[4] = self.blue
-            if self.rightlane:
-                new_states[3] = self.green
-            if self.light:
-                new_states[5] = self.red
-            if self.turnr:
-                new_states[7] = self.yellow
+            # --- POZIOM 1: ALARMY KRYTYCZNE (Nadpisują wszystko) ---
+            if getattr(self, 'collision', 0) or getattr(self, 'run_red', 0):
+                # Świecimy wszystko na jaskrawy czerwony (bez przyciemniania)
+                alert_red = (255, 0, 0) 
+                new_states = [alert_red] * 8
 
+            # --- POZIOM 2: OSTRZEŻENIA (Departure Alert) ---
+            elif getattr(self, 'departure', 0):
+                # Świecimy wszystko na np. niebiesko lub cyjan
+                alert_blue = (0, 0, 255)
+                new_states = [alert_blue] * 8
+
+            # --- POZIOM 3: STANDARDOWY STATUS (Gdy brak zagrożeń) ---
+            else:
+                # 0: Lewy kierunkowskaz
+                if self.turnl:
+                    new_states[0] = self.yellow
+                
+                # 2: Lewa linia
+                if self.leftlane:
+                    new_states[2] = self.green
+                
+                # 4: Wykrycie pojazdu (śledzenie - bezpieczne)
+                if self.carlock:
+                    new_states[4] = self.blue
+                
+                # 3: Prawa linia
+                if self.rightlane:
+                    new_states[3] = self.green
+                
+                # 5: Wykrycie światła (status, nie alarm)
+                if self.light:
+                    new_states[5] = self.red
+                
+                # 7: Prawy kierunkowskaz
+                if self.turnr:
+                    new_states[7] = self.yellow
+
+            # --- Aktualizacja sprzętowa ---
             if new_states != self.led_states:
                 self.led_states = new_states
                 for i, color in enumerate(self.led_states):
-                    self.strip._pixels[i] = Color(*color)
+                    # Rzutowanie na int dla bezpieczeństwa (biblioteka rpi_ws281x tego wymaga)
+                    r, g, b = color
+                    self.strip._pixels[i] = Color(int(r), int(g), int(b))
                 self.strip.show()
                 self.changed = False
 
@@ -1584,8 +1612,14 @@ class objColision:
                     and self.trackdistChange < -trackingSens
                 ):  # areachange > CollisionThresh and
                     print("COLLISION ALERT")
+                    if RaspberryPi:
+                        statled.set_state(collision=1) # WŁĄCZ ALARM
+                        statled.update_leds()
                     frameout = warn(2, frameout)
-
+                else:
+                    if RaspberryPi and hasattr(statled, 'collision') and statled.collision:
+                        statled.set_state(collision=0) # WYŁĄCZ ALARM
+                        statled.update_leds()
             # check if the negative change in size of the car of intrest is above the thresh but also not a new car for only one frame
             self.oldCOIarea = self.COIarea  # make new values old
             self.oldCOIxlenght = self.COIxlenght
