@@ -2499,37 +2499,36 @@ try:
             print("-Done calculating")
 
             if debugDisplay:
-                h_target = 480 # rozdzielczość ekranu
+                # 1. Przygotowanie obrazów (skalowanie do wspólnej wysokości 480px)
+                h_target = 480
                 
-                landscape_img = cv2.resize(laneDep.laneframe, (int(laneDep.laneframe.shape[1] * (h_target/laneDep.laneframe.shape[0])), h_target))
-
-                adas_img = cv2.resize(frameout, (int(frameout.shape[1] * (h_target/frameout.shape[0])), h_target))
+                # Pobieramy obrazy z klas
+                img_left = laneDep.laneframe if len(laneDep.laneframe) > 0 else np.zeros((h_target, 400, 3), np.uint8)
+                img_right = frameout
                 
-                combined_view = np.hstack((landscape_img, adas_img))
+                # Skalowanie
+                img_left_res = cv2.resize(img_left, (int(img_left.shape[1] * (h_target/img_left.shape[0])), h_target))
+                img_right_res = cv2.resize(img_right, (int(img_right.shape[1] * (h_target/img_right.shape[0])), h_target))
+                
+                # Łączenie w jeden poziom (Landscape | ADAS)
+                combined_view = np.hstack((img_left_res, img_right_res))
 
+                # 2. Rysowanie przycisku SETTINGS
                 bx, by, bw, bh = button_rect
-                b_color = (0, 255, 0) if show_settings else (100, 100, 100)
-                cv2.rectangle(combined_view, (bx, by), (bx + bw, by + bh), b_color, -1)
+                color = (0, 255, 0) if show_settings else (100, 100, 100)
+                cv2.rectangle(combined_view, (bx, by), (bx + bw, by + bh), color, -1)
                 cv2.putText(combined_view, "SETTINGS", (bx + 15, by + 35), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-                cv2.rectangle(combined_view, (0, h_target-30), (200, h_target), (0,0,0), -1)
-                cv2.putText(combined_view, f"FPS: {frame_rate_tot:.1f} | {timecalc*1000:.1f}ms", 
-                            (5, h_target-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-
+                # 3. Wyświetlanie głównego okna i podpięcie myszy/dotyku
                 cv2.namedWindow("ADAS_SYSTEM", cv2.WINDOW_NORMAL)
                 cv2.setMouseCallback("ADAS_SYSTEM", on_touch)
                 cv2.imshow("ADAS_SYSTEM", combined_view)
-
-                if show_settings:
-                    try:
-                        CollisionSens = cv2.getTrackbarPos("CollisionSens", "settings") * 0.01
-                        CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "settings") * 1000
-                        departureSens = cv2.getTrackbarPos("departureSens", "settings")
-                        minDistLight = cv2.getTrackbarPos("minDistLight", "settings")
-                        accelN = cv2.getTrackbarPos("accelN", "settings")
-                    except:
-                        pass
+                
+                # Zamknij stare pojedyncze okna, jeśli istnieją (sprzątanie)
+                if cv2.getWindowProperty("ADAS", 0) >= 0: cv2.destroyWindow("ADAS")
+                if cv2.getWindowProperty("lanedep", 0) >= 0: cv2.destroyWindow("lanedep")
+                if cv2.getWindowProperty("frameout", 0) >= 0: cv2.destroyWindow("frameout")
 
             if RaspberryPi:
                 if tsign_left:
