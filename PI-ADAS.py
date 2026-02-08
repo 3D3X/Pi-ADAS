@@ -515,10 +515,13 @@ class OBDManager(tk.Tk):
             "pin": self.pairing_code.get()
         }
         self.destroy()
+        self.quit()
+        self.update()
 
     def on_skip(self):
         self.result = None
-        self.destroy()
+        self.quit()
+        self.update()
 
 class OBDII:
     def __init__(self):
@@ -591,17 +594,13 @@ class OBDII:
         bt_devices = self._scan_bluetooth()
         gui = OBDManager(bt_devices)
         gui.mainloop()
+        result = gui.result
+        gui.destroy() # CAŁKOWITE usunięcie instancji przed dalszą pracą
         
-        if gui.result:
-            self.port = self._pair_and_bind(gui.result['mac'], gui.result['pin'])
-            if self.port and self._attempt_connection():
-                self._save_history(gui.result['mac'], gui.result['name'])
-                return True
-            else:
-                messagebox.showerror("Błąd", "Nie udało się nawiązać połączenia z OBDII.")
+        if result:
+            self.port = self._pair_and_bind(result['mac'], result['pin'])
+            return self._attempt_connection()
         
-        print("Kontynuacja bez OBD.")
-        self.is_connected = False
         return False
 
     def _attempt_connection(self):
@@ -2358,27 +2357,31 @@ def warn(arg, mask):
 
 
 try:
-
+    # 1. NAJPIERW OBD (Zanim ruszą inne wątki)
     if not videoFileMode:
-        # initialize obd connection
+        print("Inicjalizacja OBD...")
         obdii = OBDII()
-        loading_animation.set_phase("obd")
-        obdii.connectOBD()
-    # else:
-    #     with open(nameOfFile + '.avglog','rb') as fp:
-    #         avglog = pickle.load(fp)
-    # Initialize video stream/file
-    print("geting videostream")
-    loading_animation.set_phase("camera")
+        # To wywoła okno Tkinter w głównym wątku
+        obd_success = obdii.connectOBD() 
+        
+        if not obd_success:
+            print("System ADAS będzie działał bez danych z komputera pokładowego.")
+
+    # 2. TERAZ URUCHOM ANIMACJĘ I RESZTĘ WĄTKÓW
+    if RaspberryPi:
+        print("Uruchamianie animacji ładowania...")
+        loading_animation = AsyncLoadingAnimation(num_leds=8)
+        loading_animation.start() # Teraz wątek może bezpiecznie ruszyć
+
+    # 3. KAMERA
+    print("Inicjalizacja kamery...")
     if videoFileMode:
         videostream = cv2.VideoCapture(nameOfFile)
     else:
+        loading_animation.set_phase("camera")
         videostream = VideoStream().start()
-        # disable videofile variables
         skip = 0
         frameskip = 1
-        frameByframe = False
-        # for frame1 in camera.capture_continuous(rawCapture, format="bgr",use_video_port=True):
     vwidth = int(videostream.get(cv2.CAP_PROP_FRAME_WIDTH))
     vheight = int(videostream.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
