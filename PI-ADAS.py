@@ -38,6 +38,8 @@ camOffset = 0
 fi = []
 fc = []
 ft = []
+show_perf_popup = False
+button_rect = (10, 10, 150, 50)
 # Pi Variables
 buzzerPin = 13  # Configure the GPIO pin for the buzzer speaker
 turnPin = (
@@ -260,23 +262,39 @@ timeDistLight = 1
 """
 
 
+
+show_settings = False # Zmienna sterująca widocznością suwaków
+button_rect = (10, 10, 150, 50) # x, y, szerokość, wysokość przycisku
+CollisionSens = 0.05
+CollisionThresh = 9000
+departureSens = 20
+minDistLight = 2
+accelN = 5
+
 def nothing(x):
     pass
 
+def init_trackbars():
+    cv2.namedWindow("settings", cv2.WINDOW_NORMAL)
+    cv2.createTrackbar("CollisionSens", "settings", 5, 20, nothing) # domyślnie 0.05
+    cv2.createTrackbar("CollisionThresh", "settings", 9, 20, nothing) # domyślnie 9000
+    cv2.createTrackbar("departureSens", "settings", 20, 50, nothing)
+    cv2.createTrackbar("minDistLight", "settings", 2, 20, nothing)
+    cv2.createTrackbar("accelN", "settings", 5, 15, nothing)
 
-cv2.namedWindow("frameout")
-cv2.createTrackbar("CollisionSens", "frameout", 0, 20, nothing)
-cv2.createTrackbar("CollisionThresh", "frameout", 0, 20, nothing)
-cv2.createTrackbar("departureSens", "frameout", 0, 20, nothing)
-cv2.createTrackbar("minDistLight", "frameout", 0, 20, nothing)
-cv2.createTrackbar("accelN", "frameout", 0, 15, nothing)
-
-# Set default value for Max HSV trackbars
-cv2.setTrackbarPos("CollisionSens", "frameout", int(CollisionSens * 100))
-cv2.setTrackbarPos("CollisionThresh", "frameout", int(CollisionThresh / 1000))
-cv2.setTrackbarPos("departureSens", "frameout", departureSens)
-cv2.setTrackbarPos("minDistLight", "frameout", minDistLight)
-cv2.setTrackbarPos("accelN", "frameout", accelN)
+def on_touch(event, x, y, flags, param):
+    global show_settings
+    if event == cv2.EVENT_LBUTTONDOWN:
+        bx, by, bw, bh = button_rect
+        if bx <= x <= bx + bw and by <= y <= by + bh:
+            show_settings = not show_settings
+            if show_settings:
+                init_trackbars()
+            else:
+                try:
+                    cv2.destroyWindow("settings")
+                except:
+                    pass
 
 if RaspberryPi:
 
@@ -2296,8 +2314,28 @@ try:
 
     frameCount = 0
     oldframe = []
+    last_settings_state = False
 
+    def on_touch(event, x, y, flags, param):
+        global show_settings
+        if event == cv2.EVENT_LBUTTONDOWN:
+            bx, by, bw, bh = button_rect
+            if bx <= x <= bx + bw and by <= y <= by + bh:
+                show_settings = not show_settings
+    
+    
     while True:
+        if show_settings != last_settings_state:
+            if show_settings:
+                init_trackbars()
+                print("Otwarto okno ustawień")
+            else:
+                try:
+                    cv2.destroyWindow("settings")
+                    print("Zamknięto okno ustawień")
+                except:
+                    pass
+            last_settings_state = show_settings
         # Grab frame from video stream
         # print("\n---Getting next frame "+str(frameCount)+"---")
         ret, frame = videostream.read()
@@ -2310,12 +2348,18 @@ try:
         # if videoFileMode:
         #     carSpeed = avglog[frameCount]
         if skip <= 0 and frameCount % frameskip == 0:
-            # Start timer (for calculating frame rate)
-            CollisionSens = cv2.getTrackbarPos("CollisionSens", "frameout") * 0.01
-            CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "frameout") * 1000
-            departureSens = cv2.getTrackbarPos("departureSens", "frameout")
-            minDistLight = cv2.getTrackbarPos("minDistLight", "frameout")
-            accelN = cv2.getTrackbarPos("accelN", "frameout")
+            if show_settings:
+                try:
+                    # Sprawdzamy czy okno nadal żyje zanim pobierzemy dane
+                    if cv2.getWindowProperty("settings", cv2.WND_PROP_VISIBLE) >= 1:
+                        CollisionSens = cv2.getTrackbarPos("CollisionSens", "settings") * 0.01
+                        CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "settings") * 1000
+                        departureSens = cv2.getTrackbarPos("departureSens", "settings")
+                        minDistLight = cv2.getTrackbarPos("minDistLight", "settings")
+                        accelN = cv2.getTrackbarPos("accelN", "settings")
+                except:
+                    # Jeśli okno zostało zamknięte "krzyżykiem", zresetuj flagę
+                    show_settings = False
 
             if tcalc == 0:
                 tstart = cv2.getTickCount()
@@ -2463,65 +2507,36 @@ try:
             print("-Done calculating")
 
             if debugDisplay:
-                # Draw framerate in corner of frame
-                if videoFileMode:
-                    cv2.putText(
-                        frameout,
-                        "Frame:{0}".format(frameCount),
-                        (130, vheight),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
-                        (255, 255, 0),
-                        2,
-                        cv2.LINE_AA,
-                    )
-                cv2.putText(
-                    frameout,
-                    "speed:" + str(carSpeed),
-                    (10, vheight - 35),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    frameout,
-                    "accel:" + str("%.3f" % carAccel),
-                    (10, vheight - 62),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                # Draw turn signals
+                # 1. Przygotowanie obrazów (skalowanie do wspólnej wysokości 480px)
+                h_target = 480
+                
+                # Pobieramy obrazy z klas
+                img_left = laneDep.laneframe if len(laneDep.laneframe) > 0 else np.zeros((h_target, 400, 3), np.uint8)
+                img_right = frameout
+                
+                # Skalowanie
+                img_left_res = cv2.resize(img_left, (int(img_left.shape[1] * (h_target/img_left.shape[0])), h_target))
+                img_right_res = cv2.resize(img_right, (int(img_right.shape[1] * (h_target/img_right.shape[0])), h_target))
+                
+                # Łączenie w jeden poziom (Landscape | ADAS)
+                combined_view = np.hstack((img_left_res, img_right_res))
 
-                if tsign_left:
-                    cv2.putText(
-                        frameout,
-                        "<",
-                        (10, 250),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        2,
-                        (0, 255, 255),
-                        4,
-                        cv2.LINE_AA,
-                    )
-                if tsign_right:
-                    cv2.putText(
-                        frameout,
-                        ">",
-                        (10, vwidth - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        2,
-                        (0, 255, 255),
-                        4,
-                        cv2.LINE_AA,
-                    )
+                # 2. Rysowanie przycisku SETTINGS
+                bx, by, bw, bh = button_rect
+                color = (0, 255, 0) if show_settings else (100, 100, 100)
+                cv2.rectangle(combined_view, (bx, by), (bx + bw, by + bh), color, -1)
+                cv2.putText(combined_view, "SETTINGS", (bx + 15, by + 35), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-                cv2.imshow("ADAS", frameout)
-                cv2.imshow("lanedep", laneDep.laneframe)
+                # 3. Wyświetlanie głównego okna i podpięcie myszy/dotyku
+                cv2.namedWindow("ADAS_SYSTEM", cv2.WINDOW_NORMAL)
+                cv2.setMouseCallback("ADAS_SYSTEM", on_touch)
+                cv2.imshow("ADAS_SYSTEM", combined_view)
+                
+                # Zamknij stare pojedyncze okna, jeśli istnieją (sprzątanie)
+                if cv2.getWindowProperty("ADAS", 0) >= 0: cv2.destroyWindow("ADAS")
+                if cv2.getWindowProperty("lanedep", 0) >= 0: cv2.destroyWindow("lanedep")
+                if cv2.getWindowProperty("frameout", 0) >= 0: cv2.destroyWindow("frameout")
 
             if RaspberryPi:
                 if tsign_left:
@@ -2586,6 +2601,9 @@ try:
 
         else:
             skip = skip - 1
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
+            break
 
 
 finally:
