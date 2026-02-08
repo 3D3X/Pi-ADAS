@@ -12,7 +12,7 @@
 import cv2
 import numpy as np
 import os
-
+import multiprocessing
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 import argparse
 import time
@@ -467,61 +467,66 @@ if RaspberryPi:
 
 HISTORY_FILE = "obd_history.json"
 
-class OBDManager(tk.Tk):
-    """Okno Pop-up do wyboru urządzenia Bluetooth"""
-    def __init__(self, devices):
-        super().__init__()
-        self.title("Wybór urządzenia OBDII")
-        self.geometry("400x500")
-        self.result = None
-        self.pairing_code = tk.StringVar(value="1234")
-        
-        tk.Label(self, text="Znalezione urządzenia Bluetooth:", font=('Arial', 10, 'bold')).pack(pady=10)
-        
-        # Lista urządzeń
-        self.tree = ttk.Treeview(self, columns=("MAC", "Nazwa"), show='headings', height=10)
-        self.tree.heading("MAC", text="Adres MAC")
-        self.tree.heading("Nazwa", text="Nazwa")
-        self.tree.column("MAC", width=150)
-        self.tree.column("Nazwa", width=200)
-        self.tree.pack(pady=5, padx=10)
+def bluetooth_selection_process(devices, queue):
+    """Funkcja uruchamiana w osobnym procesie, aby uniknąć konfliktów z wątkami ADAS"""
+    import tkinter as tk
+    from tkinter import ttk
 
-        for dev in devices:
-            self.tree.insert("", tk.END, values=(dev['mac'], dev['name']))
+    class OBDManager:
+        def __init__(self, devices):
+            self.root = tk.Tk()
+            self.root.title("Wybór urządzenia OBDII")
+            self.root.geometry("400x550")
+            self.result = None
+            
+            tk.Label(self.root, text="Znalezione urządzenia Bluetooth:", font=('Arial', 10, 'bold')).pack(pady=10)
+            
+            self.tree = ttk.Treeview(self.root, columns=("MAC", "Nazwa"), show='headings', height=10)
+            self.tree.heading("MAC", text="Adres MAC")
+            self.tree.heading("Nazwa", text="Nazwa")
+            self.tree.column("MAC", width=150)
+            self.tree.column("Nazwa", width=200)
+            self.tree.pack(pady=5, padx=10)
 
-        # Kod parowania
-        tk.Label(self, text="Kod parowania (PIN):").pack(pady=5)
-        tk.Entry(self, textvariable=self.pairing_code, justify='center').pack()
+            for dev in devices:
+                self.tree.insert("", tk.END, values=(dev['mac'], dev['name']))
 
-        # Przyciski
-        btn_frame = tk.Frame(self)
-        btn_frame.pack(pady=20)
-        
-        tk.Button(btn_frame, text="Połącz z wybranym", command=self.on_connect, 
-                  bg="#2ecc71", fg="white", width=20, height=2).pack(pady=5)
-        
-        tk.Button(btn_frame, text="Nie łącz aktualnie", command=self.on_skip, 
-                  bg="#e74c3c", fg="white", width=20).pack(pady=5)
+            tk.Label(self.root, text="Kod parowania (PIN):").pack(pady=5)
+            self.pin_entry = tk.Entry(self.root, justify='center')
+            self.pin_entry.insert(0, "1234")
+            self.pin_entry.pack()
 
-    def on_connect(self):
-        selected = self.tree.selection()
-        if not selected:
-            messagebox.showwarning("Błąd", "Wybierz urządzenie z listy!")
-            return
-        item = self.tree.item(selected)
-        self.result = {
-            "mac": item['values'][0],
-            "name": item['values'][1],
-            "pin": self.pairing_code.get()
-        }
-        self.destroy()
-        self.quit()
-        self.update()
+            btn_frame = tk.Frame(self.root)
+            btn_frame.pack(pady=20)
+            
+            tk.Button(btn_frame, text="Połącz z wybranym", command=self.on_connect, 
+                      bg="#2ecc71", fg="white", width=20, height=2).pack(pady=5)
+            
+            tk.Button(btn_frame, text="Nie łącz aktualnie", command=self.on_skip, 
+                      bg="#e74c3c", fg="white", width=20).pack(pady=5)
 
-    def on_skip(self):
-        self.result = None
-        self.quit()
-        self.update()
+        def on_connect(self):
+            selected = self.tree.selection()
+            if selected:
+                item = self.tree.item(selected)
+                self.result = {
+                    "mac": item['values'][0],
+                    "name": item['values'][1],
+                    "pin": self.pin_entry.get()
+                }
+                self.root.destroy()
+
+        def on_skip(self):
+            self.result = None
+            self.root.destroy()
+
+        def run(self):
+            self.root.mainloop()
+            return self.result
+
+    manager = OBDManager(devices)
+    selected_device = manager.run()
+    queue.put(selected_device)
 
 class OBDII:
     def __init__(self):
@@ -537,91 +542,76 @@ class OBDII:
 
     def _get_history(self):
         try:
-            with open(HISTORY_FILE, 'r') as f:
+            with open("obd_history.json", 'r') as f:
                 return json.load(f)
         except:
             return None
 
     def _save_history(self, mac, name):
-        with open(HISTORY_FILE, 'w') as f:
+        with open("obd_history.json", 'w') as f:
             json.dump({"mac": mac, "name": name}, f)
 
     def _scan_bluetooth(self):
-        print("Skanowanie urządzeń Bluetooth...")
-        # Proste skanowanie przez bluetoothctl
+        print("Skanowanie Bluetooth...")
         devices = []
         try:
-            # Uruchomienie skanowania na 5 sekund
-            subprocess.run(["bluetoothctl", "scan", "on"], timeout=5, stdout=subprocess.DEVNULL)
-            # Pobranie listy znanych urządzeń
+            subprocess.run(["bluetoothctl", "scan", "on"], timeout=4, stdout=subprocess.DEVNULL)
             out = subprocess.check_output(["bluetoothctl", "devices"]).decode()
             for line in out.splitlines():
                 parts = line.split(" ", 2)
                 if len(parts) >= 3:
                     devices.append({"mac": parts[1], "name": parts[2]})
-        except Exception as e:
-            print(f"Błąd skanowania: {e}")
+        except: pass
         return devices
 
-    def _pair_and_bind(self, mac, pin):
-        """Paruje urządzenie i binduje do /dev/rfcomm0"""
-        try:
-            print(f"Parowanie z {mac}...")
-            # Komendy bluetoothctl do parowania
-            subprocess.run(f'echo "pair {mac}\nexpect \"Enter PIN code:\"\nsend \"{pin}\r\"\ntrust {mac}\nquit" | bluetoothctl', shell=True)
-            
-            # Bind do rfcomm0 (wymaga sudo lub odpowiednich uprawnień)
-            subprocess.run(["sudo", "rfcomm", "release", "0"], stderr=subprocess.DEVNULL)
-            subprocess.run(["sudo", "rfcomm", "bind", "0", mac])
-            time.sleep(2)
-            return "/dev/rfcomm0"
-        except Exception as e:
-            print(f"Błąd parowania/bindu: {e}")
-            return None
-
     def connectOBD(self):
+        # 1. Historia
         history = self._get_history()
-        
-        # 1. Próba połączenia z historią
         if history:
-            print(f"Próba automatycznego połączenia z: {history['name']} ({history['mac']})")
-            self.port = "/dev/rfcomm0" # Zakładamy standardowy port po bindzie
+            self.port = "/dev/rfcomm0"
             if self._attempt_connection():
                 return True
-            print("Automatyczne połączenie nieudane.")
 
-        # 2. Jeśli brak historii lub nieudane - pokaż Pop-up
+        # 2. Wybór w osobnym procesie (izolacja Tkintera)
         bt_devices = self._scan_bluetooth()
-        gui = OBDManager(bt_devices)
-        gui.mainloop()
-        result = gui.result
-        gui.destroy() # CAŁKOWITE usunięcie instancji przed dalszą pracą
-        
-        if result:
-            self.port = self._pair_and_bind(result['mac'], result['pin'])
-            return self._attempt_connection()
+        queue = multiprocessing.Queue()
+        p = multiprocessing.Process(target=bluetooth_selection_process, args=(bt_devices, queue))
+        p.start()
+        selected_device = queue.get() # Czeka na wynik z okna
+        p.join() # Zamyka proces okna całkowicie
+
+        if selected_device:
+            try:
+                mac = selected_device['mac']
+                pin = selected_device['pin']
+                print(f"Parowanie z {mac}...")
+                subprocess.run(f'echo "pair {mac}\nexpect \"Enter PIN code:\"\nsend \"{pin}\r\"\ntrust {mac}\nquit" | bluetoothctl', shell=True)
+                subprocess.run(["sudo", "rfcomm", "release", "0"], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "rfcomm", "bind", "0", mac])
+                time.sleep(2)
+                self.port = "/dev/rfcomm0"
+                if self._attempt_connection():
+                    self._save_history(mac, selected_device['name'])
+                    return True
+            except Exception as e:
+                print(f"Błąd: {e}")
         
         return False
 
     def _attempt_connection(self):
-        """Właściwa próba nawiązania komunikacji protokołem OBD"""
         try:
-            self.connection = obd.Async(self.port, fast=False, timeout=15)
+            self.connection = obd.Async(self.port, fast=False)
             self.connection.watch(self.cmd)
             self.connection.start()
-            
-            # Czekamy chwilę na potwierdzenie statusu
-            time.sleep(2)
+            time.sleep(1)
             if self.connection.is_connected():
-                print(f"Połączono z OBD na porcie {self.port}")
                 self.is_connected = True
                 return True
-        except:
-            pass
+        except: pass
         return False
 
     def UpdateAccelSpeed(self):
-        if not self.is_connected:
+        if not self.is_connected or not self.connection.is_connected():
             return
         global carSpeed, carAccel
 
@@ -2357,29 +2347,23 @@ def warn(arg, mask):
 
 
 try:
-    # 1. NAJPIERW OBD (Zanim ruszą inne wątki)
     if not videoFileMode:
-        print("Inicjalizacja OBD...")
+        # Ustawienie metody startu dla procesów
+        multiprocessing.set_start_method('spawn', force=True)
         obdii = OBDII()
-        # To wywoła okno Tkinter w głównym wątku
-        obd_success = obdii.connectOBD() 
-        
-        if not obd_success:
-            print("System ADAS będzie działał bez danych z komputera pokładowego.")
+        print("Inicjalizacja systemu OBD...")
+        obdii.connectOBD()
 
-    # 2. TERAZ URUCHOM ANIMACJĘ I RESZTĘ WĄTKÓW
-    if RaspberryPi:
-        print("Uruchamianie animacji ładowania...")
-        loading_animation = AsyncLoadingAnimation(num_leds=8)
-        loading_animation.start() # Teraz wątek może bezpiecznie ruszyć
+        # 2. Start animacji LED
+        if RaspberryPi:
+            loading_animation = AsyncLoadingAnimation(num_leds=8)
+            loading_animation.start()
 
-    # 3. KAMERA
-    print("Inicjalizacja kamery...")
-    if videoFileMode:
-        videostream = cv2.VideoCapture(nameOfFile)
-    else:
-        loading_animation.set_phase("camera")
-        videostream = VideoStream().start()
+        # 3. Start kamery (teraz nie będzie konfliktu z Tkinterem)
+        if videoFileMode:
+            videostream = cv2.VideoCapture(nameOfFile)
+        else:
+            videostream = VideoStream().start()
         skip = 0
         frameskip = 1
     vwidth = int(videostream.get(cv2.CAP_PROP_FRAME_WIDTH))
