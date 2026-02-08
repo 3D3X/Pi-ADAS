@@ -12,7 +12,7 @@
 import cv2
 import numpy as np
 import os
-
+import multiprocessing
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 import argparse
 import time
@@ -26,7 +26,10 @@ import math
 import time
 from picamera2 import Picamera2
 from rpi5_ws2812.ws2812 import Color, WS2812SpiDriver
-
+import json
+import subprocess
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 # Global Config Variables
 RaspberryPi = True
@@ -462,56 +465,154 @@ if RaspberryPi:
                 print("already playing")
 
 
+HISTORY_FILE = "obd_history.json"
+
+def bluetooth_selection_process(devices, queue):
+    """Funkcja uruchamiana w osobnym procesie, aby uniknąć konfliktów z wątkami ADAS"""
+    import tkinter as tk
+    from tkinter import ttk
+
+    class OBDManager:
+        def __init__(self, devices):
+            self.root = tk.Tk()
+            self.root.title("Wybór urządzenia OBDII")
+            self.root.geometry("400x550")
+            self.result = None
+            
+            tk.Label(self.root, text="Znalezione urządzenia Bluetooth:", font=('Arial', 10, 'bold')).pack(pady=10)
+            
+            self.tree = ttk.Treeview(self.root, columns=("MAC", "Nazwa"), show='headings', height=10)
+            self.tree.heading("MAC", text="Adres MAC")
+            self.tree.heading("Nazwa", text="Nazwa")
+            self.tree.column("MAC", width=150)
+            self.tree.column("Nazwa", width=200)
+            self.tree.pack(pady=5, padx=10)
+
+            for dev in devices:
+                self.tree.insert("", tk.END, values=(dev['mac'], dev['name']))
+
+            tk.Label(self.root, text="Kod parowania (PIN):").pack(pady=5)
+            self.pin_entry = tk.Entry(self.root, justify='center')
+            self.pin_entry.insert(0, "1234")
+            self.pin_entry.pack()
+
+            btn_frame = tk.Frame(self.root)
+            btn_frame.pack(pady=20)
+            
+            tk.Button(btn_frame, text="Połącz z wybranym", command=self.on_connect, 
+                      bg="#2ecc71", fg="white", width=20, height=2).pack(pady=5)
+            
+            tk.Button(btn_frame, text="Nie łącz aktualnie", command=self.on_skip, 
+                      bg="#e74c3c", fg="white", width=20).pack(pady=5)
+
+        def on_connect(self):
+            selected = self.tree.selection()
+            if selected:
+                item = self.tree.item(selected)
+                self.result = {
+                    "mac": item['values'][0],
+                    "name": item['values'][1],
+                    "pin": self.pin_entry.get()
+                }
+                self.root.destroy()
+
+        def on_skip(self):
+            self.result = None
+            self.root.destroy()
+
+        def run(self):
+            self.root.mainloop()
+            return self.result
+
+    manager = OBDManager(devices)
+    selected_device = manager.run()
+    queue.put(selected_device)
+
 class OBDII:
     def __init__(self):
-        global accelN
         self.cmd = obd.commands.SPEED
         self.oldSpeed = 0
         self.prevTime = datetime.datetime.now()
         self.currTime = datetime.datetime.now()
-        self.time = 0
         self.accelLog = []
         self.avgAccel = 0
-        self.avglog = []
-        self.speedlog = []
         self.connection = None
         self.is_connected = False
+        self.port = None
 
-        for n in range(0, accelN - 1):
-            self.avglog.append(np.nan)
+    def _get_history(self):
+        try:
+            with open("obd_history.json", 'r') as f:
+                return json.load(f)
+        except:
+            return None
+
+    def _save_history(self, mac, name):
+        with open("obd_history.json", 'w') as f:
+            json.dump({"mac": mac, "name": name}, f)
+
+    def _scan_bluetooth(self):
+        print("Skanowanie Bluetooth...")
+        devices = []
+        try:
+            subprocess.run(["bluetoothctl", "scan", "on"], timeout=4, stdout=subprocess.DEVNULL)
+            out = subprocess.check_output(["bluetoothctl", "devices"]).decode()
+            for line in out.splitlines():
+                parts = line.split(" ", 2)
+                if len(parts) >= 3:
+                    devices.append({"mac": parts[1], "name": parts[2]})
+        except: pass
+        return devices
 
     def connectOBD(self):
-        max_attempts = 5
-        attempt = 0
+        # 1. Historia
+        history = self._get_history()
+        if history:
+            self.port = "/dev/rfcomm0"
+            if self._attempt_connection():
+                return True
 
-        while attempt < max_attempts:
+        # 2. Wybór w osobnym procesie (izolacja Tkintera)
+        bt_devices = self._scan_bluetooth()
+        queue = multiprocessing.Queue()
+        p = multiprocessing.Process(target=bluetooth_selection_process, args=(bt_devices, queue))
+        p.start()
+        selected_device = queue.get() # Czeka na wynik z okna
+        p.join() # Zamyka proces okna całkowicie
+
+        if selected_device:
             try:
-                print(f"Próba połączenia z OBD ({attempt+1}/{max_attempts})")
-                self.connection = obd.Async(
-                    portstr="/dev/pts/2",
-                    baudrate=9600,
-                    protocol=None,
-                    timeout=30,
-                    fast=False,
-                )
-                self.connection.watch(self.cmd)  # keep track of the Speed
-                self.connection.start()  # start the async update loop
-                time.sleep(1)
-
-                if self.connection.is_connected():
-                    print("Połączono z OBD")
-                    self.is_connected = True
+                mac = selected_device['mac']
+                pin = selected_device['pin']
+                print(f"Parowanie z {mac}...")
+                subprocess.run(f'echo "pair {mac}\nexpect \"Enter PIN code:\"\nsend \"{pin}\r\"\ntrust {mac}\nquit" | bluetoothctl', shell=True)
+                subprocess.run(["sudo", "rfcomm", "release", "0"], stderr=subprocess.DEVNULL)
+                subprocess.run(["sudo", "rfcomm", "bind", "0", mac])
+                time.sleep(2)
+                self.port = "/dev/rfcomm0"
+                if self._attempt_connection():
+                    self._save_history(mac, selected_device['name'])
                     return True
             except Exception as e:
-                print(f"Błąd połączenia z OBD: {e}")
+                print(f"Błąd: {e}")
+        
+        return False
 
-            attempt += 1
+    def _attempt_connection(self):
+        try:
+            self.connection = obd.Async(self.port, fast=False)
+            self.connection.watch(self.cmd)
+            self.connection.start()
             time.sleep(1)
-
-        print("Nie można połączyć z OBD po wielu próbach")
+            if self.connection.is_connected():
+                self.is_connected = True
+                return True
+        except: pass
         return False
 
     def UpdateAccelSpeed(self):
+        if not self.is_connected or not self.connection.is_connected():
+            return
         global carSpeed, carAccel
 
         try:
@@ -2244,392 +2345,390 @@ def warn(arg, mask):
 
     return mask
 
+if __name__ == "__main__":
+    try:
+        if not videoFileMode:
+            # Ustawienie metody startu dla procesów
+            multiprocessing.set_start_method('spawn', force=True)
+            obdii = OBDII()
+            print("Inicjalizacja systemu OBD...")
+            obdii.connectOBD()
 
-try:
-
-    if not videoFileMode:
-        # initialize obd connection
-        obdii = OBDII()
-        loading_animation.set_phase("obd")
-        obdii.connectOBD()
-    # else:
-    #     with open(nameOfFile + '.avglog','rb') as fp:
-    #         avglog = pickle.load(fp)
-    # Initialize video stream/file
-    print("geting videostream")
-    loading_animation.set_phase("camera")
-    if videoFileMode:
-        videostream = cv2.VideoCapture(nameOfFile)
-    else:
-        videostream = VideoStream().start()
-        # disable videofile variables
-        skip = 0
-        frameskip = 1
-        frameByframe = False
-        # for frame1 in camera.capture_continuous(rawCapture, format="bgr",use_video_port=True):
-    vwidth = int(videostream.get(cv2.CAP_PROP_FRAME_WIDTH))
-    vheight = int(videostream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    # initialize buzzer and sound
-    if RaspberryPi:
-        beep = Beep()
-    mixer.init()
-    sound = mixer.Sound("/home/edex/Desktop/Pi-ADAS/warnSound.ogg")
-
-    # initialize Status LEDs
-    if RaspberryPi:
-        time.sleep(0.5)
-        statled = statLED()
-
-    # initialize Hall effect sensor for turn signal
-    if RaspberryPi:
-        turn = hallSens()
-
-    # initialize model with arguments
-    Model = Model()
-    loading_animation.stop()
-
-    # timestamp an output directory for each capture
-    # outdir = args.output_path
-
-    # Initialize frame rate calculation
-    fi = []
-    fc = []
-    ft = []
-    frame_rate_infr = 1
-    frame_rate_calc = 1
-    frame_rate_tot = 1
-    freq = cv2.getTickFrequency()
-
-    # Initrialize Lane Departure
-    laneDep = LaneDeparture(videostream)
-
-    # Initrialize Object colision
-    objCol = objColision()
-
-    # Initrialize Light Detection
-    lightDet = LightDet()
-
-    tcalc = 0
-
-    frameCount = 0
-    oldframe = []
-    last_settings_state = False
-
-    def on_touch(event, x, y, flags, param):
-        global show_settings
-        if event == cv2.EVENT_LBUTTONDOWN:
-            bx, by, bw, bh = button_rect
-            if bx <= x <= bx + bw and by <= y <= by + bh:
-                show_settings = not show_settings
-    
-    
-    while True:
-        if show_settings != last_settings_state:
-            if show_settings:
-                init_trackbars()
-                print("Otwarto okno ustawień")
-            else:
-                try:
-                    cv2.destroyWindow("settings")
-                    print("Zamknięto okno ustawień")
-                except:
-                    pass
-            last_settings_state = show_settings
-        # Grab frame from video stream
-        # print("\n---Getting next frame "+str(frameCount)+"---")
-        ret, frame = videostream.read()
-        # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        if not ret:
-            print("Reached the end of the video!")
-            break
-        # cv2.imshow('image', frame)
-        frameCount = frameCount + 1
-        # if videoFileMode:
-        #     carSpeed = avglog[frameCount]
-        if skip <= 0 and frameCount % frameskip == 0:
-            if show_settings:
-                try:
-                    # Sprawdzamy czy okno nadal żyje zanim pobierzemy dane
-                    if cv2.getWindowProperty("settings", cv2.WND_PROP_VISIBLE) >= 1:
-                        CollisionSens = cv2.getTrackbarPos("CollisionSens", "settings") * 0.01
-                        CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "settings") * 1000
-                        departureSens = cv2.getTrackbarPos("departureSens", "settings")
-                        minDistLight = cv2.getTrackbarPos("minDistLight", "settings")
-                        accelN = cv2.getTrackbarPos("accelN", "settings")
-                except:
-                    # Jeśli okno zostało zamknięte "krzyżykiem", zresetuj flagę
-                    show_settings = False
-
-            if tcalc == 0:
-                tstart = cv2.getTickCount()
-            else:
-                tstart = tcalc
-
-            tinfr = cv2.getTickCount()
-
-            frameor = frame
-
-            vwidth = int(videostream.get(cv2.CAP_PROP_FRAME_WIDTH))
-            vheight = int(videostream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-            # if videoFileMode:
-            if vheight != vwidth:
-                if vheight > vwidth:
-                    cropstart = (vheight / 2 - vwidth / 2) - cropoffset
-                    cropend = (vheight / 2 + vwidth / 2) - cropoffset
-                    frame = frame[int(cropstart) : int(cropend), 0 : int(vwidth)]
-                    vheight = vwidth
-                else:
-                    cropstart = vwidth / 2 - vheight / 2
-                    cropend = vwidth / 2 + vheight / 2
-                    frame = frame[0 : int(vheight), int(cropstart) : int(cropend)]
-                    vwidth = vheight
-
-            frameout = frame
-
-            print("\n---Prossesing next frame---")
-            tstart = cv2.getTickCount()
-            warned = False
-            if not videoFileMode:
-                obdii.UpdateAccelSpeed()
-
+            # 2. Start animacji LED
             if RaspberryPi:
-                turn.setTurn()
+                loading_animation = AsyncLoadingAnimation(num_leds=8)
+                loading_animation.start()
 
-            # Perform Lane departure warning
+            # 3. Start kamery (teraz nie będzie konfliktu z Tkinterem)
+            if videoFileMode:
+                videostream = cv2.VideoCapture(nameOfFile)
+            else:
+                videostream = VideoStream().start()
+            skip = 0
+            frameskip = 1
+        vwidth = int(videostream.get(cv2.CAP_PROP_FRAME_WIDTH))
+        vheight = int(videostream.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            # try:
-            Thread(target=laneDep.laneDeparture, args=(frameor,)).start()
-            # except:
+        # initialize buzzer and sound
+        if RaspberryPi:
+            beep = Beep()
+        mixer.init()
+        sound = mixer.Sound("/home/edex/Desktop/Pi-ADAS/warnSound.ogg")
 
-            # laneframe = laneDep.laneDeparture(frameor)
+        # initialize Status LEDs
+        if RaspberryPi:
+            time.sleep(0.5)
+            statled = statLED()
 
-            # Perform object detection by running the model with the image as input
-            boxes, classes, scores = Model.detectObj(frame)
+        # initialize Hall effect sensor for turn signal
+        if RaspberryPi:
+            turn = hallSens()
 
-            tinfr = cv2.getTickCount()
+        # initialize model with arguments
+        Model = Model()
+        loading_animation.stop()
 
-            print("-Done infrancing")
+        # timestamp an output directory for each capture
+        # outdir = args.output_path
 
-            # initialize Frame Data
-            objCol.initFrameVar()
+        # Initialize frame rate calculation
+        fi = []
+        fc = []
+        ft = []
+        frame_rate_infr = 1
+        frame_rate_calc = 1
+        frame_rate_tot = 1
+        freq = cv2.getTickFrequency()
 
-            lightCenters = []
-            lightDet.initFrameVar()
+        # Initrialize Lane Departure
+        laneDep = LaneDeparture(videostream)
 
-            # Loop over all detections and draw detection box if confidence is above minimum threshold
-            for i in range(len(scores)):
-                # num=len(scores)
-                if (scores[i] > Model.min_conf_threshold) and (scores[i] <= 1.0):
-                    # Look up object name from "labels" array using class index
-                    object_name = Model.labels[int(classes[i])]
+        # Initrialize Object colision
+        objCol = objColision()
 
-                    # Get bounding box coordinates and draw box
-                    # Interpreter can return coordinates that are outside of image dimensions, need to force them to be within image using max() and min()
-                    ymin = int(max(1, (boxes[i][0] * Model.imH)))
-                    xmin = int(max(1, (boxes[i][1] * Model.imW)))
-                    ymax = int(min(Model.imH, (boxes[i][2] * Model.imH)))
-                    xmax = int(min(Model.imW, (boxes[i][3] * Model.imW)))
+        # Initrialize Light Detection
+        lightDet = LightDet()
 
-                    # find area,center,lenghts
-                    xlenght = xmax - xmin
-                    ylenght = ymax - ymin
-                    area = (xlenght) * (ylenght)
-                    center = xmin + (xlenght) / 2
-                    centery = ymin + (ylenght) / 2
+        tcalc = 0
 
-                    # ------------ Frame - Traffic light color -------------------
+        frameCount = 0
+        oldframe = []
+        last_settings_state = False
 
-                    if object_name == "traffic light":
-                        # ignore lights in the same possition
-                        if all(
-                            abs(center - lightCenter) > xlenght
-                            for lightCenter in lightCenters
-                        ):
-                            lightCenters.append(center)
-
-                            # Get Color Windows of traffic Light
-                            hsv_img_red, hsv_img_green = lightDet.getLightColorWindows(
-                                frame
-                            )
-
-                            # check for double light
-                            lightDet.checkDoubleLight(hsv_img_red, hsv_img_green)
-
-                            # check for normal lights
-                            if not lightDet.doublelight:
-                                lightDet.checkNormalight(hsv_img_red, hsv_img_green)
-
-                            # Get light color of intrest
-                            lightDet.getLOI(ymin)
-
-                            # Draw label
-                            lightDet.drawLights(0)
-
-                    # ------------ Frame - Colision Detection-------------------
-
-                    else:
-                        # desc pt1-Frame:Select a car as car of intrest by which are in path and closest, also check if its a new car
-
-                        # ignore boxes that are touching the edge of the frame (cant judge size)
-                        if (xmin > 10) and (xmax < vwidth - 10):
-
-                            # Select a car as car of intrest by which are in path and closest, also check if its a new car
-                            objCol.getObjOfIntrest()
-
-                            # Draw labels
-                            objCol.drawObjCol(0)
-
-            #  Time - Light of intrest actions
-
-            # lightDet.lightTracking()
-
-            # draw light of intrest as white
-            lightDet.drawLights(1)
-
-            # desc:  Average many frames of light detection to remove random noise by using a single value (oldLOIcolor)
-            #        with positive being green, negative red and zero no light
-            lightDet.threshColor()
-
-            # desc: Check if red has reached threshhold and based on the position of the light of intrest and the
-            #        deceleration warn the driver
-            lightDet.runRedWarn()
-
-            # Time - Colision Detection
-
-            # desc pt2-Time: Find if there is a collision or departure if stoped by mesuring the change in size of the car in front
-            #       (coi) and comparing it to a threshhold but also taking into account if threre is a new car
-            objCol.objColWarn()
-
-            objCol.drawObjCol(1)
-
-            print("-Done calculating")
-
-            if debugDisplay:
-                # 1. Przygotowanie obrazów (skalowanie do wspólnej wysokości 480px)
-                h_target = 480
-                
-                # Pobieramy obrazy z klas
-                img_left = laneDep.laneframe if len(laneDep.laneframe) > 0 else np.zeros((h_target, 400, 3), np.uint8)
-                img_right = frameout
-                
-                # Skalowanie
-                img_left_res = cv2.resize(img_left, (int(img_left.shape[1] * (h_target/img_left.shape[0])), h_target))
-                img_right_res = cv2.resize(img_right, (int(img_right.shape[1] * (h_target/img_right.shape[0])), h_target))
-                
-                # Łączenie w jeden poziom (Landscape | ADAS)
-                combined_view = np.hstack((img_left_res, img_right_res))
-
-                # 2. Rysowanie przycisku SETTINGS
+        def on_touch(event, x, y, flags, param):
+            global show_settings
+            if event == cv2.EVENT_LBUTTONDOWN:
                 bx, by, bw, bh = button_rect
-                color = (0, 255, 0) if show_settings else (100, 100, 100)
-                cv2.rectangle(combined_view, (bx, by), (bx + bw, by + bh), color, -1)
-                cv2.putText(combined_view, "SETTINGS", (bx + 15, by + 35), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-                # 3. Wyświetlanie głównego okna i podpięcie myszy/dotyku
-                cv2.namedWindow("ADAS_SYSTEM", cv2.WINDOW_NORMAL)
-                cv2.setMouseCallback("ADAS_SYSTEM", on_touch)
-                cv2.imshow("ADAS_SYSTEM", combined_view)
-                
-                # Zamknij stare pojedyncze okna, jeśli istnieją (sprzątanie)
-                if cv2.getWindowProperty("ADAS", 0) >= 0: cv2.destroyWindow("ADAS")
-                if cv2.getWindowProperty("lanedep", 0) >= 0: cv2.destroyWindow("lanedep")
-                if cv2.getWindowProperty("frameout", 0) >= 0: cv2.destroyWindow("frameout")
-
-            if RaspberryPi:
-                if tsign_left:
-                    statled.set_state(turnl=1)
-                    statled.update_leds()
-                if tsign_right:
-                    statled.set_state(turnr=1)
-                    statled.update_leds()
-
-                if (frameCount / frameskip) % 3 == 0:
-                    statled.update_leds()
-
-            # save frames
-            if saveFramestoDisk:
-                path = str(outdir) + "/" + str(datetime.datetime.now()) + ".jpg"
-                Thread(target=cv2.imwrite, args=(path, frame)).start()
-                # print(path, status)status =
-
-            # Calculate framerates
-
-            tcalc = cv2.getTickCount()
-            timeinfr = (tinfr - tstart) / freq
-            timecalc = (tcalc - tinfr) / freq
-            timetotal = (tcalc - tstart) / freq
-            frame_rate_infr = 1 / timeinfr
-            frame_rate_calc = 1 / timecalc
-            frame_rate_tot = 1 / timetotal
-            fi.append(frame_rate_infr)
-            fc.append(frame_rate_calc)
-            ft.append(frame_rate_tot)
-            print(
-                "Infrancing: {0:.2f} fps".format(frame_rate_infr)
-                + " ({0:.2f}s)".format(timeinfr)
-            )
-            print(
-                "Calculation: {0:.2f} fps".format(frame_rate_calc)
-                + " ({0:.2f}s)".format(timecalc)
-            )
-            print(
-                "Total: {0:.2f} fps".format(frame_rate_tot)
-                + " ({0:.2f}s)".format(timetotal)
-            )
-
-            if videoFileMode and (frameByframe or warned) and oldframe != []:
-                cv2.imshow("prev frame", oldframe)
-                # cv2.waitKey(0) == ord('e')
-
-            oldframe = frameout
-
-            if cv2.waitKey(1) == ord("q"):
+                if bx <= x <= bx + bw and by <= y <= by + bh:
+                    show_settings = not show_settings
+        
+        
+        while True:
+            if show_settings != last_settings_state:
+                if show_settings:
+                    init_trackbars()
+                    print("Otwarto okno ustawień")
+                else:
+                    try:
+                        cv2.destroyWindow("settings")
+                        print("Zamknięto okno ustawień")
+                    except:
+                        pass
+                last_settings_state = show_settings
+            # Grab frame from video stream
+            # print("\n---Getting next frame "+str(frameCount)+"---")
+            ret, frame = videostream.read()
+            # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if not ret:
+                print("Reached the end of the video!")
                 break
-            if cv2.waitKey(1) == ord("a"):
-                tsign_left = True
-                tsign_right = False
-            if cv2.waitKey(1) == ord("d"):
-                tsign_right = True
-                tsign_left = False
-            if cv2.waitKey(1) == ord("w"):
-                tsign_right = False
-                tsign_left = False
-            # Press 'q' to quit
+            # cv2.imshow('image', frame)
+            frameCount = frameCount + 1
+            # if videoFileMode:
+            #     carSpeed = avglog[frameCount]
+            if skip <= 0 and frameCount % frameskip == 0:
+                if show_settings:
+                    try:
+                        # Sprawdzamy czy okno nadal żyje zanim pobierzemy dane
+                        if cv2.getWindowProperty("settings", cv2.WND_PROP_VISIBLE) >= 1:
+                            CollisionSens = cv2.getTrackbarPos("CollisionSens", "settings") * 0.01
+                            CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "settings") * 1000
+                            departureSens = cv2.getTrackbarPos("departureSens", "settings")
+                            minDistLight = cv2.getTrackbarPos("minDistLight", "settings")
+                            accelN = cv2.getTrackbarPos("accelN", "settings")
+                    except:
+                        # Jeśli okno zostało zamknięte "krzyżykiem", zresetuj flagę
+                        show_settings = False
 
-        else:
-            skip = skip - 1
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
-            break
+                if tcalc == 0:
+                    tstart = cv2.getTickCount()
+                else:
+                    tstart = tcalc
+
+                tinfr = cv2.getTickCount()
+
+                frameor = frame
+
+                vwidth = int(videostream.get(cv2.CAP_PROP_FRAME_WIDTH))
+                vheight = int(videostream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+                # if videoFileMode:
+                if vheight != vwidth:
+                    if vheight > vwidth:
+                        cropstart = (vheight / 2 - vwidth / 2) - cropoffset
+                        cropend = (vheight / 2 + vwidth / 2) - cropoffset
+                        frame = frame[int(cropstart) : int(cropend), 0 : int(vwidth)]
+                        vheight = vwidth
+                    else:
+                        cropstart = vwidth / 2 - vheight / 2
+                        cropend = vwidth / 2 + vheight / 2
+                        frame = frame[0 : int(vheight), int(cropstart) : int(cropend)]
+                        vwidth = vheight
+
+                frameout = frame
+
+                print("\n---Prossesing next frame---")
+                tstart = cv2.getTickCount()
+                warned = False
+                if not videoFileMode:
+                    obdii.UpdateAccelSpeed()
+
+                if RaspberryPi:
+                    turn.setTurn()
+
+                # Perform Lane departure warning
+
+                # try:
+                Thread(target=laneDep.laneDeparture, args=(frameor,)).start()
+                # except:
+
+                # laneframe = laneDep.laneDeparture(frameor)
+
+                # Perform object detection by running the model with the image as input
+                boxes, classes, scores = Model.detectObj(frame)
+
+                tinfr = cv2.getTickCount()
+
+                print("-Done infrancing")
+
+                # initialize Frame Data
+                objCol.initFrameVar()
+
+                lightCenters = []
+                lightDet.initFrameVar()
+
+                # Loop over all detections and draw detection box if confidence is above minimum threshold
+                for i in range(len(scores)):
+                    # num=len(scores)
+                    if (scores[i] > Model.min_conf_threshold) and (scores[i] <= 1.0):
+                        # Look up object name from "labels" array using class index
+                        object_name = Model.labels[int(classes[i])]
+
+                        # Get bounding box coordinates and draw box
+                        # Interpreter can return coordinates that are outside of image dimensions, need to force them to be within image using max() and min()
+                        ymin = int(max(1, (boxes[i][0] * Model.imH)))
+                        xmin = int(max(1, (boxes[i][1] * Model.imW)))
+                        ymax = int(min(Model.imH, (boxes[i][2] * Model.imH)))
+                        xmax = int(min(Model.imW, (boxes[i][3] * Model.imW)))
+
+                        # find area,center,lenghts
+                        xlenght = xmax - xmin
+                        ylenght = ymax - ymin
+                        area = (xlenght) * (ylenght)
+                        center = xmin + (xlenght) / 2
+                        centery = ymin + (ylenght) / 2
+
+                        # ------------ Frame - Traffic light color -------------------
+
+                        if object_name == "traffic light":
+                            # ignore lights in the same possition
+                            if all(
+                                abs(center - lightCenter) > xlenght
+                                for lightCenter in lightCenters
+                            ):
+                                lightCenters.append(center)
+
+                                # Get Color Windows of traffic Light
+                                hsv_img_red, hsv_img_green = lightDet.getLightColorWindows(
+                                    frame
+                                )
+
+                                # check for double light
+                                lightDet.checkDoubleLight(hsv_img_red, hsv_img_green)
+
+                                # check for normal lights
+                                if not lightDet.doublelight:
+                                    lightDet.checkNormalight(hsv_img_red, hsv_img_green)
+
+                                # Get light color of intrest
+                                lightDet.getLOI(ymin)
+
+                                # Draw label
+                                lightDet.drawLights(0)
+
+                        # ------------ Frame - Colision Detection-------------------
+
+                        else:
+                            # desc pt1-Frame:Select a car as car of intrest by which are in path and closest, also check if its a new car
+
+                            # ignore boxes that are touching the edge of the frame (cant judge size)
+                            if (xmin > 10) and (xmax < vwidth - 10):
+
+                                # Select a car as car of intrest by which are in path and closest, also check if its a new car
+                                objCol.getObjOfIntrest()
+
+                                # Draw labels
+                                objCol.drawObjCol(0)
+
+                #  Time - Light of intrest actions
+
+                # lightDet.lightTracking()
+
+                # draw light of intrest as white
+                lightDet.drawLights(1)
+
+                # desc:  Average many frames of light detection to remove random noise by using a single value (oldLOIcolor)
+                #        with positive being green, negative red and zero no light
+                lightDet.threshColor()
+
+                # desc: Check if red has reached threshhold and based on the position of the light of intrest and the
+                #        deceleration warn the driver
+                lightDet.runRedWarn()
+
+                # Time - Colision Detection
+
+                # desc pt2-Time: Find if there is a collision or departure if stoped by mesuring the change in size of the car in front
+                #       (coi) and comparing it to a threshhold but also taking into account if threre is a new car
+                objCol.objColWarn()
+
+                objCol.drawObjCol(1)
+
+                print("-Done calculating")
+
+                if debugDisplay:
+                    # 1. Przygotowanie obrazów (skalowanie do wspólnej wysokości 480px)
+                    h_target = 480
+                    
+                    # Pobieramy obrazy z klas
+                    img_left = laneDep.laneframe if len(laneDep.laneframe) > 0 else np.zeros((h_target, 400, 3), np.uint8)
+                    img_right = frameout
+                    
+                    # Skalowanie
+                    img_left_res = cv2.resize(img_left, (int(img_left.shape[1] * (h_target/img_left.shape[0])), h_target))
+                    img_right_res = cv2.resize(img_right, (int(img_right.shape[1] * (h_target/img_right.shape[0])), h_target))
+                    
+                    # Łączenie w jeden poziom (Landscape | ADAS)
+                    combined_view = np.hstack((img_left_res, img_right_res))
+
+                    # 2. Rysowanie przycisku SETTINGS
+                    bx, by, bw, bh = button_rect
+                    color = (0, 255, 0) if show_settings else (100, 100, 100)
+                    cv2.rectangle(combined_view, (bx, by), (bx + bw, by + bh), color, -1)
+                    cv2.putText(combined_view, "SETTINGS", (bx + 15, by + 35), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+                    # 3. Wyświetlanie głównego okna i podpięcie myszy/dotyku
+                    cv2.namedWindow("ADAS_SYSTEM", cv2.WINDOW_NORMAL)
+                    cv2.setMouseCallback("ADAS_SYSTEM", on_touch)
+                    cv2.imshow("ADAS_SYSTEM", combined_view)
+                    
+                    # Zamknij stare pojedyncze okna, jeśli istnieją (sprzątanie)
+                    if cv2.getWindowProperty("ADAS", 0) >= 0: cv2.destroyWindow("ADAS")
+                    if cv2.getWindowProperty("lanedep", 0) >= 0: cv2.destroyWindow("lanedep")
+                    if cv2.getWindowProperty("frameout", 0) >= 0: cv2.destroyWindow("frameout")
+
+                if RaspberryPi:
+                    if tsign_left:
+                        statled.set_state(turnl=1)
+                        statled.update_leds()
+                    if tsign_right:
+                        statled.set_state(turnr=1)
+                        statled.update_leds()
+
+                    if (frameCount / frameskip) % 3 == 0:
+                        statled.update_leds()
+
+                # save frames
+                if saveFramestoDisk:
+                    path = str(outdir) + "/" + str(datetime.datetime.now()) + ".jpg"
+                    Thread(target=cv2.imwrite, args=(path, frame)).start()
+                    # print(path, status)status =
+
+                # Calculate framerates
+
+                tcalc = cv2.getTickCount()
+                timeinfr = (tinfr - tstart) / freq
+                timecalc = (tcalc - tinfr) / freq
+                timetotal = (tcalc - tstart) / freq
+                frame_rate_infr = 1 / timeinfr
+                frame_rate_calc = 1 / timecalc
+                frame_rate_tot = 1 / timetotal
+                fi.append(frame_rate_infr)
+                fc.append(frame_rate_calc)
+                ft.append(frame_rate_tot)
+                print(
+                    "Infrancing: {0:.2f} fps".format(frame_rate_infr)
+                    + " ({0:.2f}s)".format(timeinfr)
+                )
+                print(
+                    "Calculation: {0:.2f} fps".format(frame_rate_calc)
+                    + " ({0:.2f}s)".format(timecalc)
+                )
+                print(
+                    "Total: {0:.2f} fps".format(frame_rate_tot)
+                    + " ({0:.2f}s)".format(timetotal)
+                )
+
+                if videoFileMode and (frameByframe or warned) and oldframe != []:
+                    cv2.imshow("prev frame", oldframe)
+                    # cv2.waitKey(0) == ord('e')
+
+                oldframe = frameout
+
+                if cv2.waitKey(1) == ord("q"):
+                    break
+                if cv2.waitKey(1) == ord("a"):
+                    tsign_left = True
+                    tsign_right = False
+                if cv2.waitKey(1) == ord("d"):
+                    tsign_right = True
+                    tsign_left = False
+                if cv2.waitKey(1) == ord("w"):
+                    tsign_right = False
+                    tsign_left = False
+                # Press 'q' to quit
+
+            else:
+                skip = skip - 1
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
 
 
-finally:
-    if RaspberryPi and "statled" in locals():
-        statled.cleanup()
-    # Clean up
-    cv2.destroyAllWindows()
-    if not videoFileMode:
-        # with open('speed1.log','wb') as fp:
-        #     pickle.dump(obdii.speedlog,fp)
-        # with open('avgaccl1.log','wb') as fp:
-        #     pickle.dump(obdii.avglog,fp)
-        if "videostream" in locals() and videostream is not None:
-            videostream.stop()
-    print("\n----Exiting Program----")
-    if len(fi) > 0:
-        print(
-            "Average Infrancing: {0:.2f}".format(sum(fi) / len(fi))
-            + "fps"
-            + " ({0:.2f}s)".format(1 / (sum(fi) / len(fi)))
-        )
-        print(
-            "Average Calculation: {0:.2f} fps".format(sum(fc) / len(fc))
-            + " ({0:.2f}s)".format(1 / (sum(fc) / len(fc)))
-        )
-        print(
-            "Total Average: {0:.2f} fps".format(sum(ft) / len(ft))
-            + " ({0:.2f}s)\n\n\n".format(1 / (sum(ft) / len(ft)))
-        )
+    finally:
+        if RaspberryPi and "statled" in locals():
+            statled.cleanup()
+        # Clean up
+        cv2.destroyAllWindows()
+        if not videoFileMode:
+            # with open('speed1.log','wb') as fp:
+            #     pickle.dump(obdii.speedlog,fp)
+            # with open('avgaccl1.log','wb') as fp:
+            #     pickle.dump(obdii.avglog,fp)
+            if "videostream" in locals() and videostream is not None:
+                videostream.stop()
+        print("\n----Exiting Program----")
+        if len(fi) > 0:
+            print(
+                "Average Infrancing: {0:.2f}".format(sum(fi) / len(fi))
+                + "fps"
+                + " ({0:.2f}s)".format(1 / (sum(fi) / len(fi)))
+            )
+            print(
+                "Average Calculation: {0:.2f} fps".format(sum(fc) / len(fc))
+                + " ({0:.2f}s)".format(1 / (sum(fc) / len(fc)))
+            )
+            print(
+                "Total Average: {0:.2f} fps".format(sum(ft) / len(ft))
+                + " ({0:.2f}s)\n\n\n".format(1 / (sum(ft) / len(ft)))
+            )
