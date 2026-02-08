@@ -262,24 +262,39 @@ timeDistLight = 1
 """
 
 
-def nothing(x):
-    pass
+
 show_settings = False # Zmienna sterująca widocznością suwaków
 button_rect = (10, 10, 150, 50) # x, y, szerokość, wysokość przycisku
+CollisionSens = 0.05
+CollisionThresh = 9000
+departureSens = 20
+minDistLight = 2
+accelN = 5
+
+def nothing(x):
+    pass
 
 def init_trackbars():
     cv2.namedWindow("settings", cv2.WINDOW_NORMAL)
-    cv2.createTrackbar("CollisionSens", "settings", 0, 20, nothing)
-    cv2.createTrackbar("CollisionThresh", "settings", 0, 20, nothing)
-    cv2.createTrackbar("departureSens", "settings", 0, 20, nothing)
-    cv2.createTrackbar("minDistLight", "settings", 0, 20, nothing)
-    cv2.createTrackbar("accelN", "settings", 0, 15, nothing)
-    
-    cv2.setTrackbarPos("CollisionSens", "settings", int(CollisionSens * 100))
-    cv2.setTrackbarPos("CollisionThresh", "settings", int(CollisionThresh / 1000))
-    cv2.setTrackbarPos("departureSens", "settings", departureSens)
-    cv2.setTrackbarPos("minDistLight", "settings", minDistLight)
-    cv2.setTrackbarPos("accelN", "settings", accelN)
+    cv2.createTrackbar("CollisionSens", "settings", 5, 20, nothing) # domyślnie 0.05
+    cv2.createTrackbar("CollisionThresh", "settings", 9, 20, nothing) # domyślnie 9000
+    cv2.createTrackbar("departureSens", "settings", 20, 50, nothing)
+    cv2.createTrackbar("minDistLight", "settings", 2, 20, nothing)
+    cv2.createTrackbar("accelN", "settings", 5, 15, nothing)
+
+def on_touch(event, x, y, flags, param):
+    global show_settings
+    if event == cv2.EVENT_LBUTTONDOWN:
+        bx, by, bw, bh = button_rect
+        if bx <= x <= bx + bw and by <= y <= by + bh:
+            show_settings = not show_settings
+            if show_settings:
+                init_trackbars()
+            else:
+                try:
+                    cv2.destroyWindow("settings")
+                except:
+                    pass
 
 if RaspberryPi:
 
@@ -2327,12 +2342,16 @@ try:
         # if videoFileMode:
         #     carSpeed = avglog[frameCount]
         if skip <= 0 and frameCount % frameskip == 0:
-            # Start timer (for calculating frame rate)
-            CollisionSens = cv2.getTrackbarPos("CollisionSens", "frameout") * 0.01
-            CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "frameout") * 1000
-            departureSens = cv2.getTrackbarPos("departureSens", "frameout")
-            minDistLight = cv2.getTrackbarPos("minDistLight", "frameout")
-            accelN = cv2.getTrackbarPos("accelN", "frameout")
+            # Odczytujemy suwaki TYLKO jeśli okno "settings" istnieje
+            if show_settings:
+                try:
+                    CollisionSens = cv2.getTrackbarPos("CollisionSens", "settings") * 0.01
+                    CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "settings") * 1000
+                    departureSens = cv2.getTrackbarPos("departureSens", "settings")
+                    minDistLight = cv2.getTrackbarPos("minDistLight", "settings")
+                    accelN = cv2.getTrackbarPos("accelN", "settings")
+                except Exception as e:
+                    print(f"Błąd odczytu suwaków: {e}")
 
             if tcalc == 0:
                 tstart = cv2.getTickCount()
