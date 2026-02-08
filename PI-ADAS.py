@@ -264,21 +264,22 @@ timeDistLight = 1
 
 def nothing(x):
     pass
+show_settings = False # Zmienna sterująca widocznością suwaków
+button_rect = (10, 10, 150, 50) # x, y, szerokość, wysokość przycisku
 
-
-cv2.namedWindow("frameout")
-cv2.createTrackbar("CollisionSens", "frameout", 0, 20, nothing)
-cv2.createTrackbar("CollisionThresh", "frameout", 0, 20, nothing)
-cv2.createTrackbar("departureSens", "frameout", 0, 20, nothing)
-cv2.createTrackbar("minDistLight", "frameout", 0, 20, nothing)
-cv2.createTrackbar("accelN", "frameout", 0, 15, nothing)
-
-# Set default value for Max HSV trackbars
-cv2.setTrackbarPos("CollisionSens", "frameout", int(CollisionSens * 100))
-cv2.setTrackbarPos("CollisionThresh", "frameout", int(CollisionThresh / 1000))
-cv2.setTrackbarPos("departureSens", "frameout", departureSens)
-cv2.setTrackbarPos("minDistLight", "frameout", minDistLight)
-cv2.setTrackbarPos("accelN", "frameout", accelN)
+def init_trackbars():
+    cv2.namedWindow("settings", cv2.WINDOW_NORMAL)
+    cv2.createTrackbar("CollisionSens", "settings", 0, 20, nothing)
+    cv2.createTrackbar("CollisionThresh", "settings", 0, 20, nothing)
+    cv2.createTrackbar("departureSens", "settings", 0, 20, nothing)
+    cv2.createTrackbar("minDistLight", "settings", 0, 20, nothing)
+    cv2.createTrackbar("accelN", "settings", 0, 15, nothing)
+    
+    cv2.setTrackbarPos("CollisionSens", "settings", int(CollisionSens * 100))
+    cv2.setTrackbarPos("CollisionThresh", "settings", int(CollisionThresh / 1000))
+    cv2.setTrackbarPos("departureSens", "settings", departureSens)
+    cv2.setTrackbarPos("minDistLight", "settings", minDistLight)
+    cv2.setTrackbarPos("accelN", "settings", accelN)
 
 if RaspberryPi:
 
@@ -2299,12 +2300,20 @@ try:
     frameCount = 0
     oldframe = []
     def on_touch(event, x, y, flags, param):
-        global show_perf_popup
+        global show_settings
         if event == cv2.EVENT_LBUTTONDOWN:
             bx, by, bw, bh = button_rect
             if bx <= x <= bx + bw and by <= y <= by + bh:
-                show_perf_popup = not show_perf_popup
-
+                show_settings = not show_settings
+                if show_settings:
+                    init_trackbars()
+                else:
+                    try:
+                        cv2.destroyWindow("settings")
+                    except:
+                        pass
+    
+    
     while True:
         # Grab frame from video stream
         # print("\n---Getting next frame "+str(frameCount)+"---")
@@ -2471,56 +2480,37 @@ try:
             print("-Done calculating")
 
             if debugDisplay:
-                # 1. PRZYGOTOWANIE OBRAZÓW
-                # Upewnij się, że oba obrazy mają tę samą wysokość
-                h1, w1 = laneDep.laneframe.shape[:2]
-                h2, w2 = frameout.shape[:2]
+                h_target = 480 # rozdzielczość ekranu
                 
-                # Skalujemy widok linii (Landscape) do wysokości ADAS jeśli trzeba
-                lane_resized = cv2.resize(laneDep.laneframe, (int(w1 * (h2/h1)), h2))
-                
-                # ŁĄCZENIE OKIEN (Landscape po lewej, ADAS po prawej)
-                combined_img = np.hstack((lane_resized, frameout))
+                landscape_img = cv2.resize(laneDep.laneframe, (int(laneDep.laneframe.shape[1] * (h_target/laneDep.laneframe.shape[0])), h_target))
 
-                # 2. RYSOWANIE PRZYCISKU "STATS" (Dla ekranu dotykowego)
+                adas_img = cv2.resize(frameout, (int(frameout.shape[1] * (h_target/frameout.shape[0])), h_target))
+                
+                combined_view = np.hstack((landscape_img, adas_img))
+
                 bx, by, bw, bh = button_rect
-                cv2.rectangle(combined_img, (bx, by), (bx + bw, by + bh), (100, 100, 100), -1)
-                cv2.rectangle(combined_img, (bx, by), (bx + bw, by + bh), (255, 255, 255), 2)
-                cv2.putText(combined_img, "STATS", (bx + 20, by + 35), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                b_color = (0, 255, 0) if show_settings else (100, 100, 100)
+                cv2.rectangle(combined_view, (bx, by), (bx + bw, by + bh), b_color, -1)
+                cv2.putText(combined_view, "SETTINGS", (bx + 15, by + 35), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-                # 3. RYSOWANIE POP-UPU Z INSTRUKCJAMI / FRAMETIME
-                if show_perf_popup:
-                    # Tło pop-upu (półprzezroczysty prostokąt)
-                    overlay = combined_img.copy()
-                    pop_x, pop_y, pop_w, pop_h = (100, 100, 500, 300)
-                    cv2.rectangle(overlay, (pop_x, pop_y), (pop_x + pop_w, pop_y + pop_h), (0, 0, 0), -1)
-                    cv2.addWeighted(overlay, 0.7, combined_img, 0.3, 0, combined_img)
-                    
-                    # Dane w pop-upie
-                    stats_text = [
-                        f"FPS Total: {frame_rate_tot:.1f}",
-                        f"Inference: {timeinfr*1000:.1f} ms",
-                        f"Calculation: {timecalc*1000:.1f} ms",
-                        f"Speed: {carSpeed} km/h",
-                        f"Accel: {carAccel:.3f}"
-                    ]
-                    for i, text in enumerate(stats_text):
-                        cv2.putText(combined_img, text, (pop_x + 20, pop_y + 50 + (i * 45)), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.rectangle(combined_view, (0, h_target-30), (200, h_target), (0,0,0), -1)
+                cv2.putText(combined_view, f"FPS: {frame_rate_tot:.1f} | {timecalc*1000:.1f}ms", 
+                            (5, h_target-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
-                # 4. WYŚWIETLENIE CAŁOŚCI
                 cv2.namedWindow("ADAS_SYSTEM", cv2.WINDOW_NORMAL)
-                cv2.setMouseCallback("ADAS_SYSTEM", on_touch) # Obsługa dotyku
-                
-                # Jeśli chcesz tryb pełnoekranowy na malinie:
-                # cv2.setWindowProperty("ADAS_SYSTEM", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-                
-                cv2.imshow("ADAS_SYSTEM", combined_img)
-                
-                # Usuwamy stare okna, jeśli mogły zostać zainicjalizowane
-                if cv2.getWindowProperty("ADAS", 0) >= 0: cv2.destroyWindow("ADAS")
-                if cv2.getWindowProperty("lanedep", 0) >= 0: cv2.destroyWindow("lanedep")
+                cv2.setMouseCallback("ADAS_SYSTEM", on_touch)
+                cv2.imshow("ADAS_SYSTEM", combined_view)
+
+                if show_settings:
+                    try:
+                        CollisionSens = cv2.getTrackbarPos("CollisionSens", "settings") * 0.01
+                        CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "settings") * 1000
+                        departureSens = cv2.getTrackbarPos("departureSens", "settings")
+                        minDistLight = cv2.getTrackbarPos("minDistLight", "settings")
+                        accelN = cv2.getTrackbarPos("accelN", "settings")
+                    except:
+                        pass
 
             if RaspberryPi:
                 if tsign_left:
