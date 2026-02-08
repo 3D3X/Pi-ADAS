@@ -38,6 +38,8 @@ camOffset = 0
 fi = []
 fc = []
 ft = []
+show_perf_popup = False
+button_rect = (10, 10, 150, 50)
 # Pi Variables
 buzzerPin = 13  # Configure the GPIO pin for the buzzer speaker
 turnPin = (
@@ -2296,6 +2298,12 @@ try:
 
     frameCount = 0
     oldframe = []
+    def on_touch(event, x, y, flags, param):
+        global show_perf_popup
+        if event == cv2.EVENT_LBUTTONDOWN:
+            bx, by, bw, bh = button_rect
+            if bx <= x <= bx + bw and by <= y <= by + bh:
+                show_perf_popup = not show_perf_popup
 
     while True:
         # Grab frame from video stream
@@ -2463,65 +2471,56 @@ try:
             print("-Done calculating")
 
             if debugDisplay:
-                # Draw framerate in corner of frame
-                if videoFileMode:
-                    cv2.putText(
-                        frameout,
-                        "Frame:{0}".format(frameCount),
-                        (130, vheight),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
-                        (255, 255, 0),
-                        2,
-                        cv2.LINE_AA,
-                    )
-                cv2.putText(
-                    frameout,
-                    "speed:" + str(carSpeed),
-                    (10, vheight - 35),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                cv2.putText(
-                    frameout,
-                    "accel:" + str("%.3f" % carAccel),
-                    (10, vheight - 62),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (0, 255, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-                # Draw turn signals
+                # 1. PRZYGOTOWANIE OBRAZÓW
+                # Upewnij się, że oba obrazy mają tę samą wysokość
+                h1, w1 = laneDep.laneframe.shape[:2]
+                h2, w2 = frameout.shape[:2]
+                
+                # Skalujemy widok linii (Landscape) do wysokości ADAS jeśli trzeba
+                lane_resized = cv2.resize(laneDep.laneframe, (int(w1 * (h2/h1)), h2))
+                
+                # ŁĄCZENIE OKIEN (Landscape po lewej, ADAS po prawej)
+                combined_img = np.hstack((lane_resized, frameout))
 
-                if tsign_left:
-                    cv2.putText(
-                        frameout,
-                        "<",
-                        (10, 250),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        2,
-                        (0, 255, 255),
-                        4,
-                        cv2.LINE_AA,
-                    )
-                if tsign_right:
-                    cv2.putText(
-                        frameout,
-                        ">",
-                        (10, vwidth - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        2,
-                        (0, 255, 255),
-                        4,
-                        cv2.LINE_AA,
-                    )
+                # 2. RYSOWANIE PRZYCISKU "STATS" (Dla ekranu dotykowego)
+                bx, by, bw, bh = button_rect
+                cv2.rectangle(combined_img, (bx, by), (bx + bw, by + bh), (100, 100, 100), -1)
+                cv2.rectangle(combined_img, (bx, by), (bx + bw, by + bh), (255, 255, 255), 2)
+                cv2.putText(combined_img, "STATS", (bx + 20, by + 35), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-                cv2.imshow("ADAS", frameout)
-                cv2.imshow("lanedep", laneDep.laneframe)
+                # 3. RYSOWANIE POP-UPU Z INSTRUKCJAMI / FRAMETIME
+                if show_perf_popup:
+                    # Tło pop-upu (półprzezroczysty prostokąt)
+                    overlay = combined_img.copy()
+                    pop_x, pop_y, pop_w, pop_h = (100, 100, 500, 300)
+                    cv2.rectangle(overlay, (pop_x, pop_y), (pop_x + pop_w, pop_y + pop_h), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.7, combined_img, 0.3, 0, combined_img)
+                    
+                    # Dane w pop-upie
+                    stats_text = [
+                        f"FPS Total: {frame_rate_tot:.1f}",
+                        f"Inference: {timeinfr*1000:.1f} ms",
+                        f"Calculation: {timecalc*1000:.1f} ms",
+                        f"Speed: {carSpeed} km/h",
+                        f"Accel: {carAccel:.3f}"
+                    ]
+                    for i, text in enumerate(stats_text):
+                        cv2.putText(combined_img, text, (pop_x + 20, pop_y + 50 + (i * 45)), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+                # 4. WYŚWIETLENIE CAŁOŚCI
+                cv2.namedWindow("ADAS_SYSTEM", cv2.WINDOW_NORMAL)
+                cv2.setMouseCallback("ADAS_SYSTEM", on_touch) # Obsługa dotyku
+                
+                # Jeśli chcesz tryb pełnoekranowy na malinie:
+                # cv2.setWindowProperty("ADAS_SYSTEM", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                
+                cv2.imshow("ADAS_SYSTEM", combined_img)
+                
+                # Usuwamy stare okna, jeśli mogły zostać zainicjalizowane
+                if cv2.getWindowProperty("ADAS", 0) >= 0: cv2.destroyWindow("ADAS")
+                if cv2.getWindowProperty("lanedep", 0) >= 0: cv2.destroyWindow("lanedep")
 
             if RaspberryPi:
                 if tsign_left:
