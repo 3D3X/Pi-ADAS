@@ -2314,22 +2314,28 @@ try:
 
     frameCount = 0
     oldframe = []
+    last_settings_state = False
+
     def on_touch(event, x, y, flags, param):
         global show_settings
         if event == cv2.EVENT_LBUTTONDOWN:
             bx, by, bw, bh = button_rect
             if bx <= x <= bx + bw and by <= y <= by + bh:
                 show_settings = not show_settings
-                if show_settings:
-                    init_trackbars()
-                else:
-                    try:
-                        cv2.destroyWindow("settings")
-                    except:
-                        pass
     
     
     while True:
+        if show_settings != last_settings_state:
+            if show_settings:
+                init_trackbars()
+                print("Otwarto okno ustawień")
+            else:
+                try:
+                    cv2.destroyWindow("settings")
+                    print("Zamknięto okno ustawień")
+                except:
+                    pass
+            last_settings_state = show_settings
         # Grab frame from video stream
         # print("\n---Getting next frame "+str(frameCount)+"---")
         ret, frame = videostream.read()
@@ -2342,16 +2348,18 @@ try:
         # if videoFileMode:
         #     carSpeed = avglog[frameCount]
         if skip <= 0 and frameCount % frameskip == 0:
-            # Odczytujemy suwaki TYLKO jeśli okno "settings" istnieje
             if show_settings:
                 try:
-                    CollisionSens = cv2.getTrackbarPos("CollisionSens", "settings") * 0.01
-                    CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "settings") * 1000
-                    departureSens = cv2.getTrackbarPos("departureSens", "settings")
-                    minDistLight = cv2.getTrackbarPos("minDistLight", "settings")
-                    accelN = cv2.getTrackbarPos("accelN", "settings")
-                except Exception as e:
-                    print(f"Błąd odczytu suwaków: {e}")
+                    # Sprawdzamy czy okno nadal żyje zanim pobierzemy dane
+                    if cv2.getWindowProperty("settings", cv2.WND_PROP_VISIBLE) >= 1:
+                        CollisionSens = cv2.getTrackbarPos("CollisionSens", "settings") * 0.01
+                        CollisionThresh = cv2.getTrackbarPos("CollisionThresh", "settings") * 1000
+                        departureSens = cv2.getTrackbarPos("departureSens", "settings")
+                        minDistLight = cv2.getTrackbarPos("minDistLight", "settings")
+                        accelN = cv2.getTrackbarPos("accelN", "settings")
+                except:
+                    # Jeśli okno zostało zamknięte "krzyżykiem", zresetuj flagę
+                    show_settings = False
 
             if tcalc == 0:
                 tstart = cv2.getTickCount()
@@ -2593,6 +2601,9 @@ try:
 
         else:
             skip = skip - 1
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
+            break
 
 
 finally:
